@@ -262,9 +262,9 @@ class Connection extends \Illuminate\Database\Connection
      * @param  array   $config
      * @return \CouchbaseCluster
      */
-    protected function createConnection($dsn, array $config)
+    protected function createConnection($dsn)
     {
-        return new CouchbaseCluster($dsn, array_get($config, 'username'), array_get($config, 'password'));
+        return new CouchbaseCluster($dsn);
     }
 
     /**
