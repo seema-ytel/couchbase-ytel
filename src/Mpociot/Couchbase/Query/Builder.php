@@ -152,7 +152,6 @@ class Builder extends BaseBuilder
         $this->from = $this->connection->getBucketName();
         $this->type = $type;
 
-        $this->where('_type', $type);
         return $this;
     }
 

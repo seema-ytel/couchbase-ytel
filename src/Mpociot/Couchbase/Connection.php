@@ -44,14 +44,13 @@ class Connection extends \Illuminate\Database\Connection
         $dsn = $this->getDsn($config);
 
         // Create the connection
-        $this->connection = $this->createConnection($dsn, $config);
+        $this->connection = $this->createConnection($dsn);
 
         // Select database
         $this->bucketname = $config['bucket'];
-        $this->bucket = $this->connection->openBucket($this->bucketname);
+        $this->bucket = $this->connection->openBucket($this->bucketname, $config['password']);
 
         // Enable N1QL for bucket
-        $this->bucket->enableN1ql($config['n1ql_hosts']);
 
         $this->useDefaultPostProcessor();
 
