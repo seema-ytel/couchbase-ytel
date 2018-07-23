@@ -1,8 +1,12 @@
-<?php namespace Mpociot\Couchbase\Eloquent;
+<?php declare(strict_types=1);
+
+namespace Mpociot\Couchbase\Eloquent;
 
 use Illuminate\Database\Eloquent\Model as BaseModel;
 use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Arr;
 use Mpociot\Couchbase\Query\Builder as QueryBuilder;
+use Mpociot\Couchbase\Query\Grammar;
 use Mpociot\Couchbase\Relations\EmbedsMany;
 use Mpociot\Couchbase\Relations\EmbedsOne;
 use Illuminate\Support\Str;
@@ -35,14 +39,14 @@ abstract class Model extends BaseModel
     /**
      * Custom accessor for the model's id.
      *
-     * @param  mixed  $value
+     * @param  mixed $value
      * @return mixed
      */
     public function getIdAttribute($value)
     {
         // If we don't have a value for 'id', we will use the Couchbase '_id' value.
         // This allows us to work with models in a more sql-like way.
-        if (! $value and array_key_exists('_id', $this->attributes)) {
+        if (!$value and array_key_exists('_id', $this->attributes)) {
             $value = $this->attributes['_id'];
         }
 
@@ -60,12 +64,22 @@ abstract class Model extends BaseModel
     }
 
     /**
+     * Get the primary key for the model.
+     *
+     * @return string
+     */
+    public final function getKeyName()
+    {
+        return $this->primaryKey;
+    }
+
+    /**
      * Define an embedded one-to-many relationship.
      *
-     * @param  string  $related
-     * @param  string  $localKey
-     * @param  string  $foreignKey
-     * @param  string  $relation
+     * @param  string $related
+     * @param  string $localKey
+     * @param  string $foreignKey
+     * @param  string $relation
      * @return \Mpociot\Couchbase\Relations\EmbedsMany
      */
     protected function embedsMany($related, $localKey = null, $foreignKey = null, $relation = null)
@@ -74,7 +88,7 @@ abstract class Model extends BaseModel
         // the calling method's name and use that as the relationship name as most
         // of the time this will be what we desire to use for the relatinoships.
         if (is_null($relation)) {
-            list(, $caller) = debug_backtrace(false);
+            list(, $caller) = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
 
             $relation = $caller['function'];
         }
@@ -97,10 +111,10 @@ abstract class Model extends BaseModel
     /**
      * Define an embedded one-to-many relationship.
      *
-     * @param  string  $related
-     * @param  string  $localKey
-     * @param  string  $foreignKey
-     * @param  string  $relation
+     * @param  string $related
+     * @param  string $localKey
+     * @param  string $foreignKey
+     * @param  string $relation
      * @return \Mpociot\Couchbase\Relations\EmbedsOne
      */
     protected function embedsOne($related, $localKey = null, $foreignKey = null, $relation = null)
@@ -109,7 +123,7 @@ abstract class Model extends BaseModel
         // the calling method's name and use that as the relationship name as most
         // of the time this will be what we desire to use for the relatinoships.
         if (is_null($relation)) {
-            list(, $caller) = debug_backtrace(false);
+            list(, $caller) = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
 
             $relation = $caller['function'];
         }
@@ -152,13 +166,17 @@ abstract class Model extends BaseModel
     /**
      * Get an attribute from the model.
      *
-     * @param  string  $key
+     * @param  string $key
      * @return mixed
      */
     public function getAttribute($key)
     {
-        if (! $key) {
+        if (!$key) {
             return;
+        }
+
+        if ($key === $this->primaryKey && $key !== '_id') {
+            $key = '_id';
         }
 
         // Dot notation support.
@@ -167,7 +185,7 @@ abstract class Model extends BaseModel
         }
 
         // This checks for embedded relation support.
-        if (method_exists($this, $key) and ! method_exists(self::class, $key)) {
+        if (method_exists($this, $key) and !method_exists(self::class, $key)) {
             return $this->getRelationValue($key);
         }
 
@@ -177,7 +195,7 @@ abstract class Model extends BaseModel
     /**
      * Get an attribute from the $attributes array.
      *
-     * @param  string  $key
+     * @param  string $key
      * @return mixed
      */
     protected function getAttributeFromArray($key)
@@ -197,11 +215,15 @@ abstract class Model extends BaseModel
     /**
      * Set a given attribute on the model.
      *
-     * @param  string  $key
-     * @param  mixed   $value
+     * @param  string $key
+     * @param  mixed $value
      */
     public function setAttribute($key, $value)
     {
+        if ($key === $this->primaryKey && $key !== '_id') {
+            $key = '_id';
+        }
+
         // Support keys in dot notation.
         if (str_contains($key, '.')) {
             if (in_array($key, $this->getDates()) && $value) {
@@ -228,7 +250,7 @@ abstract class Model extends BaseModel
         // Convert dot-notation dates.
         foreach ($this->getDates() as $key) {
             if (str_contains($key, '.') and array_has($attributes, $key)) {
-                array_set($attributes, $key, (string) $this->asDateTime(array_get($attributes, $key)));
+                array_set($attributes, $key, (string)$this->asDateTime(array_get($attributes, $key)));
             }
         }
 
@@ -248,12 +270,12 @@ abstract class Model extends BaseModel
     /**
      * Remove one or more fields.
      *
-     * @param  mixed  $columns
+     * @param  mixed $columns
      * @return int
      */
     public function drop($columns)
     {
-        if (! is_array($columns)) {
+        if (!is_array($columns)) {
             $columns = [$columns];
         }
 
@@ -263,7 +285,7 @@ abstract class Model extends BaseModel
         }
 
         // Perform unset only on current document
-        return $this->newQuery()->where($this->getKeyName(), $this->getKey())->unset($columns);
+        return $this->newQuery()->useKeys([$this->getKey()])->unset($columns);
     }
 
     /**
@@ -283,7 +305,7 @@ abstract class Model extends BaseModel
             }
 
             // Do batch push by default.
-            if (! is_array($values)) {
+            if (!is_array($values)) {
                 $values = [$values];
             }
 
@@ -300,14 +322,14 @@ abstract class Model extends BaseModel
     /**
      * Remove one or more values from an array.
      *
-     * @param  string  $column
-     * @param  mixed   $values
+     * @param  string $column
+     * @param  mixed $values
      * @return mixed
      */
     public function pull($column, $values)
     {
         // Do batch pull by default.
-        if (! is_array($values)) {
+        if (!is_array($values)) {
             $values = [$values];
         }
 
@@ -321,9 +343,9 @@ abstract class Model extends BaseModel
     /**
      * Append one or more values to the underlying attribute value and sync with original.
      *
-     * @param  string  $column
-     * @param  array   $values
-     * @param  bool    $unique
+     * @param  string $column
+     * @param  array $values
+     * @param  bool $unique
      */
     protected function pushAttributeValues($column, array $values, $unique = false)
     {
@@ -346,8 +368,8 @@ abstract class Model extends BaseModel
     /**
      * Remove one or more values to the underlying attribute value and sync with original.
      *
-     * @param  string  $column
-     * @param  array   $values
+     * @param  string $column
+     * @param  array $values
      */
     protected function pullAttributeValues($column, array $values)
     {
@@ -369,7 +391,7 @@ abstract class Model extends BaseModel
     /**
      * Set the parent relation.
      *
-     * @param  \Illuminate\Database\Eloquent\Relations\Relation  $relation
+     * @param  \Illuminate\Database\Eloquent\Relations\Relation $relation
      */
     public function setParentRelation(Relation $relation)
     {
@@ -400,19 +422,40 @@ abstract class Model extends BaseModel
     /**
      * Get a new query builder instance for the connection.
      *
-     * @return Builder
+     * @return QueryBuilder
      */
     protected function newBaseQueryBuilder()
     {
         $connection = $this->getConnection();
 
-        return new QueryBuilder($connection, $connection->getPostProcessor());
+        return new QueryBuilder(
+            $connection, $connection->getQueryGrammar(), $connection->getPostProcessor()
+        );
     }
-    
+
+    /**
+     * Perform any actions that are necessary after the model is saved.
+     *
+     * @param  array $options
+     * @return void
+     */
+    protected function finishSave(array $options)
+    {
+        $this->attributes = Grammar::removeMissingValue($this->attributes);
+
+        $this->fireModelEvent('saved', false);
+
+        $this->syncOriginal();
+
+        if (Arr::get($options, 'touch', true)) {
+            $this->touchOwners();
+        }
+    }
+
     /**
      * We just return original key here in order to support keys in dot-notation
      *
-     * @param  string  $key
+     * @param  string $key
      * @return string
      */
     protected function removeTableFromKey($key)
@@ -423,7 +466,7 @@ abstract class Model extends BaseModel
     /**
      * Destroy the models for the given IDs.
      *
-     * @param  array|int  $ids
+     * @param  array|int $ids
      * @return int
      */
     public static function destroy($ids)
@@ -441,7 +484,7 @@ abstract class Model extends BaseModel
         // each of them individually so that their events get fired properly with a
         // correct set of attributes in case the developers wants to check these.
         $key = $instance->getKeyName();
-        
+
         foreach ($instance->whereIn($key, $ids)->get() as $model) {
             if ($model->delete()) {
                 $count++;
@@ -456,14 +499,14 @@ abstract class Model extends BaseModel
      */
     public function getForeignKey()
     {
-        return Str::snake(class_basename($this)).'_'.ltrim($this->primaryKey, '_');
+        return Str::snake(class_basename($this)) . '_' . ltrim($this->primaryKey, '_');
     }
 
     /**
      * Handle dynamic method calls into the method.
      *
-     * @param  string  $method
-     * @param  array   $parameters
+     * @param  string $method
+     * @param  array $parameters
      * @return mixed
      */
     public function __call($method, $parameters)
@@ -474,5 +517,21 @@ abstract class Model extends BaseModel
         }
 
         return parent::__call($method, $parameters);
+    }
+
+    /**
+     * Overrides the default 'getKey' Method.
+     * You can trigger now to remove the :: from the couchbase id
+     *
+     * @param bool $removeColons
+     * @return string
+     */
+    public function getKey(bool $removeColons = false)
+    {
+        $key = $this->getAttribute($this->getKeyName());
+        if ($removeColons === true) {
+            $key = str_replace('::', '', $key);
+        }
+        return $key;
     }
 }
