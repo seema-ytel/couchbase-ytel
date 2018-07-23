@@ -1,9 +1,12 @@
-<?php namespace Mpociot\Couchbase\Eloquent;
+<?php declare(strict_types=1);
 
-use Illuminate\Contracts\Support\Arrayable;
+namespace Mpociot\Couchbase\Eloquent;
+
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Relations\Relation;
-use Illuminate\Database\Query\Expression;
+use Illuminate\Pagination\Paginator;
+use Mpociot\Couchbase\Query\Builder as QueryBuilder;
+use Illuminate\Database\Query\Builder as BaseQueryBuilder;
 
 class Builder extends EloquentBuilder
 {
@@ -13,15 +16,43 @@ class Builder extends EloquentBuilder
      * @var array
      */
     protected $passthru = [
-        'toSql', 'insert', 'insertGetId', 'pluck',
-        'count', 'min', 'max', 'avg', 'sum', 'exists', 'push', 'pull',
+        'insert',
+        'insertGetId',
+        'getBindings',
+        'getRawBindings',
+        'toSql',
+        'exists',
+        'count',
+        'min',
+        'max',
+        'avg',
+        'sum',
+        'getConnection',
+        'pluck',
+        'push',
+        'pull',
     ];
+
+    /**
+     * Create a new Eloquent query builder instance.
+     *
+     * @param  BaseQueryBuilder $query
+     * @throws \Exception
+     * @return void
+     */
+    public function __construct(BaseQueryBuilder $query)
+    {
+        if(!($query instanceof QueryBuilder)) {
+            throw new \Exception('Argument 1 passed to '.get_class($this).'::__construct() must be an instance of '.QueryBuilder::class.', instance of '.get_class($query).' given.');
+        }
+        parent::__construct($query);
+    }
 
     /**
      * Update a record in the database.
      *
-     * @param  array  $values
-     * @param  array  $options
+     * @param  array $values
+     * @param  array $options
      * @return int
      */
     public function update(array $values, array $options = [])
@@ -40,7 +71,7 @@ class Builder extends EloquentBuilder
     /**
      * Insert a new record into the database.
      *
-     * @param  array  $values
+     * @param  array $values
      * @return bool
      */
     public function insert(array $values)
@@ -57,10 +88,63 @@ class Builder extends EloquentBuilder
     }
 
     /**
+     * Paginate the given query.
+     *
+     * @param  int $perPage
+     * @param  array $columns
+     * @param  string $pageName
+     * @param  int|null $page
+     * @return \Illuminate\Contracts\Pagination\LengthAwarePaginator
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function paginate($perPage = null, $columns = ['*'], $pageName = 'page', $page = null)
+    {
+        $page = $page ?: Paginator::resolveCurrentPage($pageName);
+
+        $perPage = $perPage ?: $this->model->getPerPage();
+
+        /** @var Builder $builder */
+        $builder = $this->forPage($page, $perPage);
+        $builder = $builder->applyScopes();
+
+        /** @var QueryBuilder $query */
+        $query = $builder->getQuery();
+
+        $rawResult = $query->getWithMeta($columns);
+        if (isset($rawResult->metrics['sortCount'])) {
+            $total = $rawResult->metrics['sortCount'];
+        } else {
+            if ($rawResult->metrics['resultCount'] === 0) {
+                $total = 0;
+            } else {
+                // should not go here...
+                $total = $query->getCountForPagination();
+            }
+        }
+        // If we actually found models we will also eager load any relationships that
+        // have been specified as needing to be eager loaded, which will solve the
+        // n+1 query issue for the developers to avoid running a lot of queries.
+        $models = $this->model->hydrate($rawResult->rows->all())->all();
+        if (count($models) > 0) {
+            $models = $builder->eagerLoadRelations($models);
+        }
+
+        $results = $total
+            ? $builder->getModel()->newCollection($models)
+            : $this->model->newCollection();
+
+        return $this->paginator($results, $total, $perPage, $page, [
+            'path' => Paginator::resolveCurrentPath(),
+            'pageName' => $pageName,
+        ]);
+    }
+
+    /**
      * Insert a new record and get the value of the primary key.
      *
-     * @param  array   $values
-     * @param  string  $sequence
+     * @param  array $values
+     * @param  string $sequence
      * @return int
      */
     public function insertGetId(array $values, $sequence = null)
@@ -97,9 +181,9 @@ class Builder extends EloquentBuilder
     /**
      * Increment a column's value by a given amount.
      *
-     * @param  string  $column
-     * @param  int     $amount
-     * @param  array   $extra
+     * @param  string $column
+     * @param  int $amount
+     * @param  array $extra
      * @return int
      */
     public function increment($column, $amount = 1, array $extra = [])
@@ -127,9 +211,9 @@ class Builder extends EloquentBuilder
     /**
      * Decrement a column's value by a given amount.
      *
-     * @param  string  $column
-     * @param  int     $amount
-     * @param  array   $extra
+     * @param  string $column
+     * @param  int $amount
+     * @param  array $extra
      * @return int
      */
     public function decrement($column, $amount = 1, array $extra = [])
@@ -153,13 +237,45 @@ class Builder extends EloquentBuilder
     }
 
     /**
+     * Add a where clause on the primary key to the query.
+     *
+     * @param  mixed $id
+     * @return $this
+     */
+    public function whereKey($id)
+    {
+        $this->query->useKeys($id);
+
+        return $this;
+    }
+
+    /**
+     * Add a basic where clause to the query.
+     *
+     * @param  string|\Closure $column
+     * @param  string $operator
+     * @param  mixed $value
+     * @param  string $boolean
+     * @return $this
+     */
+    public function where($column, $operator = null, $value = null, $boolean = 'and')
+    {
+        if ($column === $this->model->getKeyName() || $column === '_id') {
+            $value = func_num_args() == 2 ? $operator : $value;
+            $this->whereKey($value);
+            return $this;
+        }
+        return parent::where($column, $operator, $value, $boolean);
+    }
+
+    /**
      * Add the "has" condition where clause to the query.
      *
-     * @param  \Illuminate\Database\Eloquent\Builder  $hasQuery
-     * @param  \Illuminate\Database\Eloquent\Relations\Relation  $relation
-     * @param  string  $operator
-     * @param  int  $count
-     * @param  string  $boolean
+     * @param  \Illuminate\Database\Eloquent\Builder $hasQuery
+     * @param  \Illuminate\Database\Eloquent\Relations\Relation $relation
+     * @param  string $operator
+     * @param  int $count
+     * @param  string $boolean
      * @return \Illuminate\Database\Eloquent\Builder
      */
     protected function addHasWhere(EloquentBuilder $hasQuery, Relation $relation, $operator, $count, $boolean)
@@ -167,9 +283,11 @@ class Builder extends EloquentBuilder
         $query = $hasQuery->getQuery();
 
         // Get the number of related objects for each possible parent.
-        $relations = $query->pluck($relation->getHasCompareKey());
+        $relations = $query->pluck($relation->getHasCompareKey())->filter(function($value){
+            return $value !== null && $value !== '';
+        });
         $relationCount = array_count_values(array_map(function ($id) {
-            return (string) $id; // Convert Back ObjectIds to Strings
+            return (string)$id; // Convert Back ObjectIds to Strings
         }, is_array($relations) ? $relations : $relations->toArray()));
 
         // Remove unwanted related objects based on the operator and count.
@@ -207,39 +325,10 @@ class Builder extends EloquentBuilder
         return $this->whereIn($this->model->getKeyName(), $relatedIds, $boolean, $not);
     }
 
-
-
-    /**
-     * Add a "where in" clause to the query.
-     *
-     * @param  string  $column
-     * @param  mixed   $values
-     * @param  string  $boolean
-     * @return $this
-     */
-    public function whereAnyIn($column, $values, $boolean = 'and')
-    {
-        $type = 'AnyIn';
-
-        if ($values instanceof Arrayable) {
-            $values = $values->toArray();
-        }
-
-        $this->wheres[] = compact('type', 'column', 'values', 'boolean');
-
-        foreach ($values as $value) {
-            if (! $value instanceof Expression) {
-                $this->addBinding($value, 'where');
-            }
-        }
-
-        return $this;
-    }
-
     /**
      * Create a raw database expression.
      *
-     * @param  closure  $expression
+     * @param  closure $expression
      * @return mixed
      */
     public function raw($expression = null)
@@ -249,7 +338,7 @@ class Builder extends EloquentBuilder
 
         // The result is a single object.
         if (is_array($results) and array_key_exists('_id', $results)) {
-            return $this->model->newFromBuilder((array) $results);
+            return $this->model->newFromBuilder((array)$results);
         }
 
         return $results;
